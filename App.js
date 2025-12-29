@@ -1,20 +1,38 @@
+import React, { useEffect } from 'react';
 import { StatusBar } from 'expo-status-bar';
-import { StyleSheet, Text, View } from 'react-native';
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
+import AppNavigator from './navigation/AppNavigator';
+import dbManager from './database/DatabaseManager';
+import syncManager from './services/SyncManager';
 
 export default function App() {
+  useEffect(() => {
+    initializeApp();
+
+    return () => {
+      // Cleanup
+      syncManager.cleanup();
+    };
+  }, []);
+
+  const initializeApp = async () => {
+    try {
+      // Initialize database
+      await dbManager.init();
+      console.log('Database initialized');
+
+      // Initialize sync manager
+      await syncManager.init();
+      console.log('Sync manager initialized');
+    } catch (error) {
+      console.error('App initialization error:', error);
+    }
+  };
+
   return (
-    <View style={styles.container}>
-      <Text>Open up App.js to start working on your app!</Text>
-      <StatusBar style="auto" />
-    </View>
+    <GestureHandlerRootView style={{ flex: 1 }}>
+      <StatusBar style="light" />
+      <AppNavigator />
+    </GestureHandlerRootView>
   );
 }
-
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#fff',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-});

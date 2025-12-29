@@ -1,0 +1,149 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // Helper functions
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+    
+    function isOwner(userId) {
+      return request.auth.uid == userId;
+    }
+    
+    function hasRole(role) {
+      return isAuthenticated() && 
+             get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == role;
+    }
+    
+    // Users collection
+    match /users/{userId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated();
+      allow update: if isOwner(userId);
+      allow delete: if isOwner(userId);
+    }
+    
+    // Patients collection
+    match /patients/{patientId} {
+      allow read: if isAuthenticated() && (
+        isOwner(patientId) || 
+        hasRole('pharmacy') ||
+        hasRole('guardian') ||
+        resource.data.guardians.hasAny([request.auth.uid])
+      );
+      
+      allow create: if isAuthenticated() && hasRole('pharmacy');
+      
+      allow update: if isAuthenticated() && (
+        isOwner(patientId) ||
+        hasRole('pharmacy') ||
+        (hasRole('guardian') && resource.data.guardians.hasAny([request.auth.uid]))
+      );
+      
+      allow delete: if false; // Soft delete only
+    }
+    
+    // Medicines collection
+    match /medicines/{medicineId} {
+      allow read: if isAuthenticated() && (
+        isOwner(resource.data.patientId) ||
+        hasRole('pharmacy') ||
+        hasRole('guardian')
+      );
+      
+      allow create: if isAuthenticated() && (
+        hasRole('pharmacy') ||
+        hasRole('patient')
+      );
+      
+      allow update: if isAuthenticated() && (
+        hasRole('pharmacy') ||
+        isOwner(resource.data.patientId)
+      );
+      
+      allow delete: if false; // Soft delete only
+    }
+    
+    // Adherence logs collection
+    match /adherence_logs/{logId} {
+      allow read: if isAuthenticated() && (
+        isOwner(resource.data.patientId) ||
+        hasRole('pharmacy') ||
+        hasRole('guardian') ||
+        resource.data.patientId in get(/databases/$(database)/documents/users/$(request.auth.uid)).data.patients
+      );
+      
+      allow create: if isAuthenticated() && (
+        hasRole('patient') ||
+        hasRole('guardian')
+      );
+      
+      allow update: if isAuthenticated() && hasRole('guardian');
+      
+      allow delete: if false; // Never delete adherence logs
+    }
+    
+    // Interventions collection
+    match /interventions/{interventionId} {
+      allow read: if isAuthenticated() && (
+        hasRole('guardian') ||
+        hasRole('pharmacy') ||
+        isOwner(resource.data.patientId)
+      );
+      
+      allow create: if isAuthenticated() && hasRole('guardian');
+      
+      allow update: if isAuthenticated() && 
+                     isOwner(resource.data.guardianId);
+      
+      allow delete: if false;
+    }
+    
+    // Alerts collection
+    match /alerts/{alertId} {
+      allow read: if isAuthenticated() && (
+        isOwner(resource.data.guardianId) ||
+        isOwner(resource.data.patientId)
+      );
+      
+      allow create: if isAuthenticated(); // System can create alerts
+      
+      allow update: if isAuthenticated() && 
+                     isOwner(resource.data.guardianId);
+      
+      allow delete: if isAuthenticated() && 
+                     isOwner(resource.data.guardianId);
+    }
+    
+    // Pharmacies collection
+    match /pharmacies/{pharmacyId} {
+      allow read: if isAuthenticated();
+      
+      allow create: if isAuthenticated() && hasRole('pharmacy');
+      
+      allow update: if isAuthenticated() && isOwner(pharmacyId);
+      
+      allow delete: if false;
+    }
+    
+    // Guardians collection
+    match /guardians/{guardianId} {
+      allow read: if isAuthenticated() && (
+        isOwner(guardianId) ||
+        hasRole('pharmacy')
+      );
+      
+      allow create: if isAuthenticated();
+      
+      allow update: if isAuthenticated() && isOwner(guardianId);
+      
+      allow delete: if isOwner(guardianId);
+    }
+    
+    // Sync queue (for debugging)
+    match /sync_queue/{queueId} {
+      allow read, write: if isAuthenticated();
+    }
+  }
+}
