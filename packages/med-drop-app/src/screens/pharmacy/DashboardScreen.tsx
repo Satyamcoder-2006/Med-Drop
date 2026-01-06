@@ -4,6 +4,7 @@ import { useFocusEffect } from '@react-navigation/native';
 import { StatusBar } from 'expo-status-bar';
 import { useAuth } from '../../context/AuthContext';
 import { database } from '../../services/DatabaseService';
+import { FirestoreService } from '../../services/FirestoreService';
 import { Patient, Medicine } from '../../types';
 import { useNavigation } from '@react-navigation/native';
 
@@ -21,11 +22,12 @@ export default function DashboardScreen() {
 
     const loadData = async () => {
         try {
-            const patientsData = await database.getAllPatients();
+            // Fetch patients from Firestore
+            const patientsData = await FirestoreService.getAllPatients();
 
-            // Enrich patients with their medicines
+            // Enrich patients with their medicines from Firestore
             const enrichedPatients = await Promise.all(patientsData.map(async (p) => {
-                const meds = await database.getMedicinesByPatient(p.id);
+                const meds = await FirestoreService.getMedicines(p.id);
                 return { ...p, medicines: meds };
             }));
 

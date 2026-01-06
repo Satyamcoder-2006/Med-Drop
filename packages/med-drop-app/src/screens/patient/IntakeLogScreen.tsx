@@ -5,6 +5,8 @@ import Svg, { Circle, G, Text as SvgText } from 'react-native-svg';
 import { useFocusEffect } from '@react-navigation/native';
 import { useAuth } from '../../context/AuthContext';
 import { database } from '../../services/DatabaseService';
+import { FirestoreService } from '../../services/FirestoreService';
+import { Timestamp } from 'firebase/firestore';
 import { Patient, AdherenceLog, Medicine } from '../../types';
 
 const { width } = Dimensions.get('window');
@@ -88,24 +90,42 @@ export default function IntakeLogScreen() {
 
     const loadData = async () => {
         try {
-            const patients = await database.getAllPatients();
-            const currentPatient = patients.find(p => p.id === userId || p.phone === userId);
+            // Fetch User
+            const currentPatient = await FirestoreService.getUser(userId);
 
             if (currentPatient) {
                 setPatient(currentPatient);
 
-                // Broaden boundaries to start/end of day to catch all logs
+                // Fetch Logs (All logs for now, or we could filter by date in query)
+                // For simplicity, fetching all and filtering locally, or we could add date filters to getLogs
+                const allLogs = await FirestoreService.getLogs(userId);
+
+                // Filter for last 30 days
                 const end = new Date();
                 end.setHours(23, 59, 59, 999);
-
                 const start = new Date();
                 start.setDate(start.getDate() - 30);
                 start.setHours(0, 0, 0, 0);
 
-                const recentLogs = await database.getAdherenceLogs(currentPatient.id, start, end);
-                setLogs(recentLogs.sort((a, b) => b.scheduledTime.getTime() - a.scheduledTime.getTime()));
+                const recentLogs = allLogs.filter(log => {
+                    const logDate = new Date(log.scheduledTime); // Firestore timestamps might need conversion if not handled by converter
+                    // Note: Firestore returns Timestamps, but we might want to ensure they are Date objects for comparison
+                    // If using matching types, it should be fine. E.g. log.scheduledTime.toDate() if it's a Firestore Timestamp
+                    // But our type definition says Date. We'll assume the converter handles it or we cast it.
+                    // Ideally, we handle Timestamp conversion in the Service.
+                    // For now, let's assume standard Date or ISO string if coming from JSON.
+                    // If it is a string/number, new Date() handles it. 
+                    // If it is a Firestore Timestamp object, it has .toDate().
 
-                const meds = await database.getMedicinesByPatient(currentPatient.id);
+                    // Safe conversion:
+                    const d = log.scheduledTime instanceof Timestamp ? (log.scheduledTime as any).toDate() : new Date(log.scheduledTime);
+                    return d >= start && d <= end;
+                });
+
+                setLogs(recentLogs.sort((a, b) => new Date(b.scheduledTime).getTime() - new Date(a.scheduledTime).getTime()));
+
+                // Fetch Medicines
+                const meds = await FirestoreService.getMedicines(userId);
                 setMedicines(meds);
 
                 // Calculate stats per medicine
@@ -125,11 +145,24 @@ export default function IntakeLogScreen() {
                 });
                 setMedStats(stats);
 
-                const rate = await database.getAdherenceRate(currentPatient.id);
+                // Calculate Adherence Rate (Taken / Total Actioned)
+                const totalActioned = recentLogs.filter(l => l.status === 'taken' || l.status === 'missed').length;
+                const totalTaken = recentLogs.filter(l => l.status === 'taken').length;
+                const rate = totalActioned > 0 ? totalTaken / totalActioned : 1;
                 setAdherenceRate(rate);
 
-                const risk = await database.getRiskLevel(currentPatient.id);
-                setMisses(risk.misses);
+                // Calculate Consecutive Misses (Risk)
+                // Sort by time desc
+                const sortedLogs = [...recentLogs].sort((a, b) => new Date(b.scheduledTime).getTime() - new Date(a.scheduledTime).getTime());
+                let consecutiveMisses = 0;
+                for (const log of sortedLogs) {
+                    if (log.status === 'missed') {
+                        consecutiveMisses++;
+                    } else if (log.status === 'taken') {
+                        break;
+                    }
+                }
+                setMisses(consecutiveMisses);
             }
             setLoading(false);
         } catch (error) {
@@ -162,28 +195,37 @@ export default function IntakeLogScreen() {
         }
     };
 
-    const formatDate = (date: Date) => {
+    const toDate = (date: any): Date => {
+        if (!date) return new Date();
+        if (date instanceof Timestamp) return date.toDate();
+        return new Date(date);
+    };
+
+    const formatDate = (date: any) => {
+        const d = toDate(date);
         const today = new Date();
         const yesterday = new Date(today);
         yesterday.setDate(yesterday.getDate() - 1);
 
-        if (date.toDateString() === today.toDateString()) {
+        if (d.toDateString() === today.toDateString()) {
             return 'Today';
-        } else if (date.toDateString() === yesterday.toDateString()) {
+        } else if (d.toDateString() === yesterday.toDateString()) {
             return 'Yesterday';
         } else {
-            return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+            return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
         }
     };
 
-    const formatTime = (date: Date) => {
-        return date.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+    const formatTime = (date: any) => {
+        const d = toDate(date);
+        return d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
     };
 
     // Group logs by date
     const groupedLogs: { [key: string]: AdherenceLog[] } = {};
     logs.forEach(log => {
-        const dateKey = new Date(log.scheduledTime).toDateString();
+        const d = toDate(log.scheduledTime);
+        const dateKey = d.toDateString();
         if (!groupedLogs[dateKey]) {
             groupedLogs[dateKey] = [];
         }

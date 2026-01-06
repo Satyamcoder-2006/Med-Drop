@@ -3,6 +3,7 @@ import { View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator
 import { StatusBar } from 'expo-status-bar';
 import { useAuth } from '../../context/AuthContext';
 import { database } from '../../services/DatabaseService';
+import { FirestoreService } from '../../services/FirestoreService';
 import { Patient, Alert as AlertType } from '../../types';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import * as Haptics from 'expo-haptics';
@@ -30,17 +31,18 @@ export default function DashboardScreen() {
 
     const loadData = async () => {
         try {
-            const patientsData = await database.getAllPatients();
+            // Fetch patients linked to this guardian directly
+            const myPatients = await FirestoreService.getPatientsByGuardian(userId);
 
-            // Filter patients by guardian phone
-            const myPatients = patientsData.filter(p => p.guardians?.includes(userId));
-
-            // Enrich patient data with stats and risk levels
+            // Enrich patient data in parallel
             const enrichedPatients = await Promise.all(myPatients.map(async (p) => {
-                const risk = await database.getRiskLevel(p.id);
-                const rate = await database.getAdherenceRate(p.id);
-                const meds = await database.getMedicinesByPatient(p.id);
-                const dailyStats = await database.getDailyAdherenceStats(p.id);
+                // Run these 4 checks in parallel for each patient
+                const [risk, rate, meds, dailyStats] = await Promise.all([
+                    FirestoreService.getRiskLevel(p.id),
+                    FirestoreService.getAdherenceRate(p.id),
+                    FirestoreService.getMedicines(p.id),
+                    FirestoreService.getDailyAdherenceStats(p.id)
+                ]);
 
                 return {
                     ...p,
@@ -52,13 +54,17 @@ export default function DashboardScreen() {
                 };
             }));
 
-            // Generate alerts for missed doses today
-            for (const p of enrichedPatients) {
-                if (p.dailyStats.missed > 0) {
-                    const todayStr = new Date().toDateString();
-                    const alertId = `missed_${p.id}_${todayStr.replace(/\s/g, '_')}`;
+            // Fetch persisted alerts and process missed doses in parallel
+            const allAlerts = (await FirestoreService.getAlertsByGuardian(userId)) as any[];
 
-                    await database.saveAlert({
+            // Generate or Resolve alerts for missed doses today in Firestore
+            // We can do this in background without waiting
+            Promise.all(enrichedPatients.map(async (p) => {
+                const todayStr = new Date().toDateString();
+                const alertId = `missed_${p.id}_${todayStr.replace(/\s/g, '_')}`;
+
+                if (p.dailyStats.missed > 0) {
+                    await FirestoreService.saveAlert({
                         id: alertId,
                         patientId: p.id,
                         guardianId: userId,
@@ -68,32 +74,18 @@ export default function DashboardScreen() {
                         actionTaken: false,
                         createdAt: new Date(),
                     });
+                } else {
+                    const existingAlert = allAlerts.find(a => a.id === alertId);
+                    if (existingAlert && !existingAlert.actionTaken) {
+                        await FirestoreService.resolveAlert(alertId);
+                    }
                 }
+            })).then(async () => {
+                // Update alerts state after background processing
+                const updatedAlerts = await FirestoreService.getAlertsByGuardian(userId);
+                setAlerts(updatedAlerts as any);
+            });
 
-                // Symptom reports today
-                const reports = await database.getSymptomReportsByPatient(p.id);
-                const today = new Date().toDateString();
-                const todayReports = reports.filter(r =>
-                    new Date(r.createdAt).toDateString() === today
-                );
-
-                for (const r of todayReports) {
-                    await database.saveAlert({
-                        id: `sym_${r.id}`,
-                        patientId: p.id,
-                        guardianId: userId,
-                        type: 'important',
-                        title: 'Symptom Reported',
-                        message: `${p.name} reported: ${r.symptoms.join(', ')}`,
-                        actionTaken: false,
-                        createdAt: r.createdAt,
-                    });
-                }
-            }
-
-            // Fetch persisted alerts
-            const allAlerts = await database.getAlertsByGuardian(userId);
-            setAlerts(allAlerts);
             setPatients(enrichedPatients);
             setLoading(false);
         } catch (error) {
@@ -111,7 +103,7 @@ export default function DashboardScreen() {
     const handleResolveAlert = async (alertId: string) => {
         await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
         try {
-            await database.resolveAlert(alertId);
+            await FirestoreService.resolveAlert(alertId);
             // Optimistic update
             setAlerts(prev => prev.map(a => a.id === alertId ? { ...a, actionTaken: true } : a));
         } catch (error) {
@@ -212,64 +204,78 @@ export default function DashboardScreen() {
 
                 {/* Patient List */}
                 <View style={styles.patientsSection}>
-                    <Text style={styles.sectionTitle}>👥 Patients</Text>
-                    {patients.map(patient => (
+                    <View style={styles.sectionHeader}>
+                        <Text style={styles.sectionTitle}>👥 Patients</Text>
                         <TouchableOpacity
-                            key={patient.id}
-                            style={styles.patientCard}
-                            onPress={() => {
-                                (navigation as any).navigate('PatientDetail', { patient });
-                            }}
+                            style={styles.linkButton}
+                            onPress={() => (navigation as any).navigate('LinkPatient')}
                         >
-                            <View style={styles.patientHeader}>
-                                <View style={styles.patientInfo}>
-                                    <Text style={styles.patientName}>
-                                        {getRiskIcon(patient.riskLevel)} {patient.name}
-                                    </Text>
-                                    <Text style={styles.patientAge}>{patient.age} years old</Text>
-                                </View>
-                                <View style={[styles.riskBadge, { backgroundColor: getRiskColor(patient.riskLevel) }]}>
-                                    <Text style={styles.riskText}>{patient.riskLevel.toUpperCase()}</Text>
-                                </View>
-                            </View>
-
-                            <View style={styles.patientStats}>
-                                <View style={styles.statItem}>
-                                    <Text style={[styles.statValue, { color: '#10B981' }]}>{patient.dailyStats.taken}</Text>
-                                    <Text style={styles.statText}>Taken Today</Text>
-                                </View>
-                                <View style={styles.statItem}>
-                                    <Text style={[styles.statValue, { color: patient.dailyStats.missed > 0 ? '#EF4444' : '#1F2937' }]}>
-                                        {patient.dailyStats.missed}
-                                    </Text>
-                                    <Text style={styles.statText}>Missed Today</Text>
-                                </View>
-                                <View style={styles.statItem}>
-                                    <Text style={styles.statValue}>{patient.dailyStats.pending}</Text>
-                                    <Text style={styles.statText}>Remaining</Text>
-                                </View>
-                            </View>
-
-                            <View style={styles.patientFooter}>
-                                <View style={styles.footerLeft}>
-                                    <Text style={styles.lastActivity}>
-                                        Weekly Adherence: {Math.round(patient.adherenceRate * 100)}%
-                                    </Text>
-                                    {patient.dailyStats.lastTakenTime && (
-                                        <Text style={styles.lastTakenLabel}>
-                                            Last Taken: {patient.dailyStats.lastTakenTime}
-                                        </Text>
-                                    )}
-                                </View>
-                                <TouchableOpacity
-                                    style={styles.nudgeButton}
-                                    onPress={() => handleNudge(patient.name)}
-                                >
-                                    <Text style={styles.nudgeButtonText}>🔔 Nudge</Text>
-                                </TouchableOpacity>
-                            </View>
+                            <Text style={styles.linkButtonText}>+ Link New</Text>
                         </TouchableOpacity>
-                    ))}
+                    </View>
+                    {patients.length === 0 ? (
+                        <View style={styles.emptyCard}>
+                            <Text style={styles.emptyText}>No patients linked yet.</Text>
+                            <Text style={styles.emptySubtext}>Tap "+ Link New" to connect with a patient.</Text>
+                        </View>
+                    ) : (
+                        patients.map(patient => (
+                            <TouchableOpacity
+                                key={patient.id}
+                                style={styles.patientCard}
+                                onPress={() => {
+                                    (navigation as any).navigate('PatientDetail', { patient });
+                                }}
+                            >
+                                <View style={styles.patientHeader}>
+                                    <View style={styles.patientInfo}>
+                                        <Text style={styles.patientName}>
+                                            {getRiskIcon(patient.riskLevel)} {patient.name}
+                                        </Text>
+                                        <Text style={styles.patientAge}>{patient.age} years old</Text>
+                                    </View>
+                                    <View style={[styles.riskBadge, { backgroundColor: getRiskColor(patient.riskLevel) }]}>
+                                        <Text style={styles.riskText}>{patient.riskLevel.toUpperCase()}</Text>
+                                    </View>
+                                </View>
+
+                                <View style={styles.patientStats}>
+                                    <View style={styles.statItem}>
+                                        <Text style={[styles.statValue, { color: '#10B981' }]}>{patient.dailyStats.taken}</Text>
+                                        <Text style={styles.statText}>Taken Today</Text>
+                                    </View>
+                                    <View style={styles.statItem}>
+                                        <Text style={[styles.statValue, { color: patient.dailyStats.missed > 0 ? '#EF4444' : '#1F2937' }]}>
+                                            {patient.dailyStats.missed}
+                                        </Text>
+                                        <Text style={styles.statText}>Missed Today</Text>
+                                    </View>
+                                    <View style={styles.statItem}>
+                                        <Text style={styles.statValue}>{patient.dailyStats.pending}</Text>
+                                        <Text style={styles.statText}>Remaining</Text>
+                                    </View>
+                                </View>
+
+                                <View style={styles.patientFooter}>
+                                    <View style={styles.footerLeft}>
+                                        <Text style={styles.lastActivity}>
+                                            Weekly Adherence: {Math.round(patient.adherenceRate * 100)}%
+                                        </Text>
+                                        {patient.dailyStats.lastTakenTime && (
+                                            <Text style={styles.lastTakenLabel}>
+                                                Last Taken: {patient.dailyStats.lastTakenTime}
+                                            </Text>
+                                        )}
+                                    </View>
+                                    <TouchableOpacity
+                                        style={styles.nudgeButton}
+                                        onPress={() => handleNudge(patient.name)}
+                                    >
+                                        <Text style={styles.nudgeButtonText}>🔔 Nudge</Text>
+                                    </TouchableOpacity>
+                                </View>
+                            </TouchableOpacity>
+                        )))}
                 </View>
             </ScrollView>
         </View>
@@ -401,6 +407,46 @@ const styles = StyleSheet.create({
     },
     patientsSection: {
         marginBottom: 20,
+    },
+    sectionHeader: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        marginBottom: 16,
+    },
+    linkButton: {
+        backgroundColor: '#F5F3FF',
+        paddingHorizontal: 12,
+        paddingVertical: 6,
+        borderRadius: 8,
+        borderWidth: 1,
+        borderColor: '#DDD6FE',
+    },
+    linkButtonText: {
+        color: '#8B5CF6',
+        fontSize: 14,
+        fontWeight: 'bold',
+    },
+    emptyCard: {
+        backgroundColor: '#FFFFFF',
+        borderRadius: 12,
+        padding: 32,
+        alignItems: 'center',
+        justifyContent: 'center',
+        borderWidth: 1,
+        borderColor: '#E5E7EB',
+        borderStyle: 'dashed',
+    },
+    emptyText: {
+        fontSize: 16,
+        fontWeight: '600',
+        color: '#374151',
+        marginBottom: 4,
+    },
+    emptySubtext: {
+        fontSize: 14,
+        color: '#6B7280',
+        textAlign: 'center',
     },
     patientCard: {
         backgroundColor: '#FFFFFF',

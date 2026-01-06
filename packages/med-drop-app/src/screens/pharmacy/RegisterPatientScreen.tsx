@@ -4,6 +4,7 @@ import { useRoute, useNavigation } from '@react-navigation/native';
 import { StatusBar } from 'expo-status-bar';
 import * as Haptics from 'expo-haptics';
 import { database } from '../../services/DatabaseService';
+import { FirestoreService } from '../../services/FirestoreService';
 import { Patient } from '../../types';
 
 export default function RegisterPatientScreen() {
@@ -63,9 +64,13 @@ export default function RegisterPatientScreen() {
                 updatedAt: new Date(),
             };
 
+            // Save to Firestore (cloud)
+            await FirestoreService.createOrUpdateUser(newPatient);
+
+            // Also save to local database for offline access
             await database.savePatient(newPatient);
 
-            console.log('Patient registered in DB:', newPatient);
+            console.log('Patient registered in Firestore and local DB:', newPatient);
             setSubmitted(true);
             setTimeout(() => {
                 setSubmitted(false);
@@ -82,7 +87,7 @@ export default function RegisterPatientScreen() {
             }, 2000);
         } catch (error) {
             console.error('Failed to register patient:', error);
-            Alert.alert('Error', 'Failed to save patient. Please try again.');
+            Alert.alert('Error', 'Failed to save patient. Please check your internet connection.');
         } finally {
             setLoading(false);
         }

@@ -1,11 +1,15 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput, ActivityIndicator, Image } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput, ActivityIndicator, Image, Linking, Alert as RNAlert } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { useRoute, useNavigation, useFocusEffect } from '@react-navigation/native';
+import { useAuth } from '../../context/AuthContext';
 import { database } from '../../services/DatabaseService';
+import { FirestoreService } from '../../services/FirestoreService';
 import { Patient, Medicine, AdherenceLog, SymptomReport, Alert } from '../../types';
+import { Timestamp } from 'firebase/firestore';
 
 export default function PatientDetailScreen() {
+    const { userId } = useAuth();
     const route = useRoute();
     const navigation = useNavigation();
     const initialPatient = (route.params as any)?.patient;
@@ -28,17 +32,27 @@ export default function PatientDetailScreen() {
     const loadData = async () => {
         if (!initialPatient?.id) return;
         try {
-            // Fetch updated patient data to get live stats/risk
-            const allPatients = await database.getAllPatients();
-            const p = allPatients.find(acc => acc.id === initialPatient.id);
+            // Fetch all core data in parallel
+            const [p, meds, logs, reports, alertHistory] = await Promise.all([
+                FirestoreService.getUser(initialPatient.id),
+                FirestoreService.getMedicines(initialPatient.id),
+                FirestoreService.getLogs(initialPatient.id),
+                FirestoreService.getSymptomReports(initialPatient.id),
+                FirestoreService.getAlertsByPatient(initialPatient.id)
+            ]);
+
             if (p) {
-                const risk = await database.getRiskLevel(p.id);
-                const rate = await database.getAdherenceRate(p.id);
+                // Fetch risk and rate in parallel
+                const [risk, rate] = await Promise.all([
+                    FirestoreService.getRiskLevel(p.id),
+                    FirestoreService.getAdherenceRate(p.id)
+                ]);
                 setPatient({ ...p, riskLevel: risk.level, consecutiveMisses: risk.misses, adherenceRate: rate });
             }
 
-            const meds = await database.getMedicinesByPatient(initialPatient.id);
             setMedicines(meds);
+            setSymptomReports(reports as any);
+            setAlerts(alertHistory as any);
 
             const end = new Date();
             end.setHours(23, 59, 59, 999);
@@ -46,16 +60,21 @@ export default function PatientDetailScreen() {
             start.setDate(start.getDate() - 7);
             start.setHours(0, 0, 0, 0);
 
-            const logs = await database.getAdherenceLogs(initialPatient.id, start, end);
-            setAdherenceLogs(logs);
+            // Filter logs for last 7 days locally
+            const recentLogs = logs.filter(l => {
+                const t = l.createdAt instanceof Timestamp ? l.createdAt.toDate() : new Date(l.createdAt);
+                return t >= start && t <= end;
+            });
+            setAdherenceLogs(recentLogs);
 
-            // Calculate adherence for last 7 days
+            // Calculate adherence for last 7 days (this is fast, local only)
             const chartData = Array.from({ length: 7 }, (_, i) => {
                 const date = new Date();
                 date.setDate(date.getDate() - i);
-                const dayLogs = logs.filter(log =>
-                    new Date(log.scheduledTime).toDateString() === date.toDateString()
-                );
+                const dayLogs = recentLogs.filter(log => {
+                    const logDate = log.scheduledTime instanceof Timestamp ? log.scheduledTime.toDate() : new Date(log.scheduledTime);
+                    return logDate.toDateString() === date.toDateString();
+                });
                 const taken = dayLogs.filter(l => l.status === 'taken').length;
                 const total = dayLogs.length;
                 return {
@@ -65,12 +84,6 @@ export default function PatientDetailScreen() {
                 };
             }).reverse();
             setAdherenceByDay(chartData);
-
-            const reports = await database.getSymptomReportsByPatient(initialPatient.id);
-            setSymptomReports(reports);
-
-            const alertHistory = await database.getAlertsByPatient(initialPatient.id);
-            setAlerts(alertHistory);
 
             setLoading(false);
         } catch (error) {
@@ -96,6 +109,59 @@ export default function PatientDetailScreen() {
             case 'low':
             case 'info': return '#10B981';
             default: return '#6B7280';
+        }
+    };
+
+    const handleCall = async () => {
+        if (patient.phone) {
+            Linking.openURL(`tel:${patient.phone}`);
+            await logAction('call', 'Called patient to check adherence');
+        }
+    };
+
+    const handleScheduleVisit = () => {
+        RNAlert.alert(
+            'Schedule Visit',
+            'Are you planning to visit the patient today?',
+            [
+                { text: 'Cancel', style: 'cancel' },
+                {
+                    text: 'Confirm Visit',
+                    onPress: () => logAction('visit', 'Scheduled a home visit')
+                }
+            ]
+        );
+    };
+
+    const handleAddNote = () => {
+        // Simple note for now since prompt is iOS only
+        RNAlert.alert(
+            'Add Note',
+            'Log a quick observation about the patient.',
+            [
+                { text: 'Cancel', style: 'cancel' },
+                { text: 'Doing Well', onPress: () => logAction('other', 'Patient is doing well') },
+                { text: 'Needs Help', onPress: () => logAction('other', 'Patient needs extra support') }
+            ]
+        );
+    };
+
+    const logAction = async (type: string, notes: string) => {
+        try {
+            const intervention = {
+                id: `int_${Date.now()}`,
+                guardianId: userId,
+                guardianName: 'Guardian',
+                patientId: patient.id,
+                type,
+                notes,
+                outcome: 'resolved',
+                createdAt: new Date(),
+            };
+            await FirestoreService.saveIntervention(intervention);
+            // Optionally refresh alerts or logs
+        } catch (error) {
+            console.error('Failed to log action:', error);
         }
     };
 
@@ -274,15 +340,24 @@ export default function PatientDetailScreen() {
                 )}
                 <View style={styles.actionsSection}>
                     <Text style={styles.sectionTitle}>Quick Actions</Text>
-                    <TouchableOpacity style={[styles.actionButton, { backgroundColor: '#3B82F6' }]}>
+                    <TouchableOpacity
+                        style={[styles.actionButton, { backgroundColor: '#3B82F6' }]}
+                        onPress={handleCall}
+                    >
                         <Text style={styles.actionIcon}>📞</Text>
                         <Text style={styles.actionText}>Call Patient</Text>
                     </TouchableOpacity>
-                    <TouchableOpacity style={[styles.actionButton, { backgroundColor: '#8B5CF6' }]}>
+                    <TouchableOpacity
+                        style={[styles.actionButton, { backgroundColor: '#8B5CF6' }]}
+                        onPress={handleScheduleVisit}
+                    >
                         <Text style={styles.actionIcon}>📅</Text>
                         <Text style={styles.actionText}>Schedule Visit</Text>
                     </TouchableOpacity>
-                    <TouchableOpacity style={[styles.actionButton, { backgroundColor: '#10B981' }]}>
+                    <TouchableOpacity
+                        style={[styles.actionButton, { backgroundColor: '#10B981' }]}
+                        onPress={handleAddNote}
+                    >
                         <Text style={styles.actionIcon}>📝</Text>
                         <Text style={styles.actionText}>Add Note</Text>
                     </TouchableOpacity>

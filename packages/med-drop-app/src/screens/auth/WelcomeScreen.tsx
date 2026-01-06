@@ -9,6 +9,8 @@ import {
 } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import type { StackNavigationProp } from '@react-navigation/stack';
+import { FirestoreService } from '../../services/FirestoreService';
+import { Alert } from 'react-native';
 
 type RootStackParamList = {
     Welcome: undefined;
@@ -22,6 +24,28 @@ export default function WelcomeScreen() {
 
     const handleRoleSelection = (role: 'pharmacy' | 'patient' | 'guardian') => {
         navigation.navigate('Login', { role });
+    };
+
+    const handleReset = async () => {
+        Alert.alert(
+            "🛑 Reset Database?",
+            "This will delete ALL users, pharmacies, and guardians. This cannot be undone.",
+            [
+                { text: "Cancel", style: "cancel" },
+                {
+                    text: "YES, RESET",
+                    style: "destructive",
+                    onPress: async () => {
+                        try {
+                            await FirestoreService.dangerousResetDatabase();
+                            Alert.alert("Success", "Database cleared!");
+                        } catch (e: any) {
+                            Alert.alert("Error", e.message);
+                        }
+                    }
+                }
+            ]
+        );
     };
 
     return (
@@ -63,6 +87,13 @@ export default function WelcomeScreen() {
                 >
                     <Text style={styles.roleIcon}>👨‍👩‍👧</Text>
                     <Text style={styles.roleText}>I AM A GUARDIAN</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                    style={styles.devButton}
+                    onPress={handleReset}
+                >
+                    <Text style={styles.devButtonText}>🛠️ DEVELOPER: RESET DATABASE</Text>
                 </TouchableOpacity>
             </View>
         </View>
@@ -134,4 +165,14 @@ const styles = StyleSheet.create({
         fontWeight: '600',
         color: '#FFFFFF',
     },
+    devButton: {
+        marginTop: 20,
+        padding: 10,
+        alignItems: 'center',
+    },
+    devButtonText: {
+        color: 'rgba(255,255,255,0.6)',
+        fontSize: 12,
+        fontWeight: '500',
+    }
 });

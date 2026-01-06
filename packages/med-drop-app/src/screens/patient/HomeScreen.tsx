@@ -3,9 +3,9 @@ import { View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator
 import { StatusBar } from 'expo-status-bar';
 import { useAuth } from '../../context/AuthContext';
 import { useFocusEffect } from '@react-navigation/native';
-import { database } from '../../services/DatabaseService';
+import { FirestoreService } from '../../services/FirestoreService';
 import { notificationService } from '../../services/NotificationService';
-import { Patient, AdherenceLog } from '../../types';
+import { Patient, AdherenceLog, MedicineSchedule } from '../../types';
 import ReminderModal from './ReminderModal';
 
 export default function HomeScreen() {
@@ -32,27 +32,52 @@ export default function HomeScreen() {
 
     const loadData = async () => {
         try {
-            // Find patient by userId (which is phone)
-            const patients = await database.getAllPatients();
-            const currentPatient = patients.find(p => p.id === userId || p.phone === userId);
+            // Fetch core data in parallel
+            const [currentPatient, schedule, rate] = await Promise.all([
+                FirestoreService.getUser(userId),
+                FirestoreService.getTodaysSchedule(userId),
+                FirestoreService.getAdherenceRate(userId)
+            ]);
 
             if (currentPatient) {
                 setPatient(currentPatient);
-
-                const schedule = await database.getTodaysSchedule(currentPatient.id);
                 setTodaysMeds(schedule);
-
-                const current = await database.getCurrentMedicine(currentPatient.id);
-                setCurrentMed(current);
-
-                const next = await database.getNextMedicine(currentPatient.id);
-                setNextMed(next);
-
-                const rate = await database.getAdherenceRate(currentPatient.id);
                 setAdherenceRate(rate);
 
-                // Sync notifications
-                await notificationService.syncAllReminders(currentPatient.id);
+                // Calculate current and next medicines locally (Lightning McQueen style)
+                const now = new Date();
+                const currentTimeInMinutes = now.getHours() * 60 + now.getMinutes();
+
+                let current = null;
+                let next = null;
+
+                for (const item of schedule) {
+                    if (item.status === 'pending') {
+                        const [h, m] = item.schedule.time.split(':').map(Number);
+                        const schedTimeInMinutes = h * 60 + m;
+
+                        // Check for current (within 30 mins)
+                        if (!current) {
+                            const diff = Math.abs(currentTimeInMinutes - schedTimeInMinutes);
+                            if (diff <= 30) {
+                                current = { medicine: item.medicine, schedule: item.schedule };
+                            }
+                        }
+
+                        // Check for next
+                        if (!next && schedTimeInMinutes > currentTimeInMinutes) {
+                            const diff = schedTimeInMinutes - currentTimeInMinutes;
+                            const timeUntil = diff < 60 ? `in ${diff} minutes` : `at ${item.schedule.time}`;
+                            next = { medicine: item.medicine, schedule: item.schedule, timeUntil };
+                        }
+                    }
+                }
+
+                setCurrentMed(current);
+                setNextMed(next);
+
+                // Sync notifications in background
+                notificationService.syncAllReminders(currentPatient.id);
             }
             setLoading(false);
         } catch (error) {
@@ -81,7 +106,7 @@ export default function HomeScreen() {
             createdAt: new Date(),
         };
 
-        await database.saveAdherenceLog(newLog);
+        await FirestoreService.logIntake(patient.id, newLog);
 
         setShowReminder(false);
         await loadData(); // Refresh to update status
@@ -107,7 +132,7 @@ export default function HomeScreen() {
             createdAt: new Date(),
         };
 
-        await database.saveAdherenceLog(newLog);
+        await FirestoreService.logIntake(patient.id, newLog);
         setShowReminder(false);
         await loadData();
     };
@@ -132,7 +157,7 @@ export default function HomeScreen() {
             createdAt: new Date(),
         };
 
-        await database.saveAdherenceLog(newLog);
+        await FirestoreService.logIntake(patient.id, newLog);
         setShowReminder(false);
         await loadData();
     };

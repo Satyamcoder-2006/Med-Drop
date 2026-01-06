@@ -6,6 +6,8 @@ import DashboardScreen from '../screens/guardian/DashboardScreen';
 import PatientDetailScreen from '../screens/guardian/PatientDetailScreen';
 import ProfileScreen from '../screens/auth/ProfileScreen';
 
+import LinkPatientScreen from '../screens/guardian/LinkPatientScreen';
+
 const Stack = createStackNavigator();
 const Tab = createBottomTabNavigator();
 
@@ -14,6 +16,7 @@ function DashboardStack() {
         <Stack.Navigator screenOptions={{ headerShown: false }}>
             <Stack.Screen name="DashboardMain" component={DashboardScreen} />
             <Stack.Screen name="PatientDetail" component={PatientDetailScreen} />
+            <Stack.Screen name="LinkPatient" component={LinkPatientScreen} />
         </Stack.Navigator>
     );
 }

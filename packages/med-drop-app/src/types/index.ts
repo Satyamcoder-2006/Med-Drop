@@ -11,6 +11,7 @@ export interface Patient {
   emergencyContact?: string;
   photo?: string;
   aadhaar?: string;
+  password?: string;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -76,11 +77,12 @@ export interface SymptomReport {
 }
 
 export interface Guardian {
-  id: string;
+  id: string; // Phone number
   name: string;
   phone: string;
+  relationship?: string;
   role: 'family' | 'asha' | 'friend' | 'healthcare';
-  patients: string[]; // Patient IDs
+  patients: string[]; // Patient Phone Numbers
   preferredContact: 'app' | 'sms' | 'call';
   language: string;
   doNotDisturb?: {
@@ -88,22 +90,28 @@ export interface Guardian {
     startTime: string; // HH:mm
     endTime: string; // HH:mm
   };
+  password?: string;
   createdAt: Date;
   updatedAt: Date;
 }
 
 export interface Pharmacy {
-  id: string;
+  id: string; // Phone number
   name: string;
   license: string;
   address: string;
   phone: string;
   pharmacistName: string;
   pharmacistPhone: string;
+  location?: {
+    latitude: number;
+    longitude: number;
+  };
   patientsHelped: number;
   averageAdherence: number;
   incentiveBalance: number;
   partnershipCode?: string; // For government partnerships
+  password?: string;
   createdAt: Date;
   updatedAt: Date;
 }

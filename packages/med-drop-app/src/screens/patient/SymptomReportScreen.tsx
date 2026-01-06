@@ -3,6 +3,7 @@ import { View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput } from 
 import { StatusBar } from 'expo-status-bar';
 import * as Haptics from 'expo-haptics';
 import { database } from '../../services/DatabaseService';
+import { FirestoreService } from '../../services/FirestoreService';
 import { useAuth } from '../../context/AuthContext';
 import { SymptomReport } from '../../types';
 
@@ -47,6 +48,27 @@ export default function SymptomReportScreen() {
 
         try {
             await database.saveSymptomReport(report);
+
+            // Sync to Firestore
+            await FirestoreService.saveSymptomReport(report);
+
+            // Notify Guardians via Alerts
+            const patientData = await FirestoreService.getUser(userId);
+            if (patientData && patientData.guardians) {
+                for (const guardianId of patientData.guardians) {
+                    await FirestoreService.saveAlert({
+                        id: `sym_${report.id}_${guardianId}`,
+                        patientId: userId,
+                        guardianId: guardianId,
+                        type: 'important',
+                        title: 'Symptom Reported',
+                        message: `${patientData.name} reported: ${selectedSymptoms.join(', ')}`,
+                        actionTaken: false,
+                        createdAt: new Date(),
+                    });
+                }
+            }
+
             setSubmitted(true);
             setTimeout(() => {
                 setSubmitted(false);

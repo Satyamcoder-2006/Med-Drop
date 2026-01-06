@@ -2,7 +2,8 @@ import React, { useState, useEffect } from 'react';
 import { View, Text, StyleSheet, ScrollView, Image } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { useAuth } from '../../context/AuthContext';
-import { database } from '../../services/DatabaseService';
+// import { database } from '../../services/DatabaseService';
+import { FirestoreService } from '../../services/FirestoreService';
 import { Patient, Medicine } from '../../types';
 
 export default function AllMedicinesScreen() {
@@ -11,19 +12,19 @@ export default function AllMedicinesScreen() {
     const [loading, setLoading] = useState(true);
 
     useEffect(() => {
-        loadData();
-    }, [userId]);
-
-    const loadData = async () => {
-        try {
-            const meds = await database.getMedicinesByPatient(userId);
+        setLoading(true);
+        // Subscribe to real-time updates
+        const unsubscribe = FirestoreService.getMedicinesRealtime(userId, (meds) => {
             setMedicines(meds);
             setLoading(false);
-        } catch (error) {
-            console.error('Failed to load medicines:', error);
-            setLoading(false);
-        }
-    };
+        });
+
+        // Cleanup subscription on unmount
+        return () => unsubscribe();
+    }, [userId]);
+
+    // loadData is no longer needed as we use real-time listener
+
 
     const getMealIcon = (meal: string) => {
         switch (meal) {

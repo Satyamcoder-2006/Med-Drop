@@ -1,11 +1,14 @@
 import React, { useEffect, useState } from 'react';
-import { View, ActivityIndicator } from 'react-native';
+import { View, ActivityIndicator, LogBox } from 'react-native';
 import { NavigationContainer } from '@react-navigation/native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { AuthProvider } from './src/context/AuthContext';
 import RootNavigator from './src/navigation/RootNavigator';
 import { database } from './src/services/DatabaseService';
 import { notificationService } from './src/services/NotificationService';
+
+// Suppress the internal expo-firebase-recaptcha warning
+LogBox.ignoreLogs(['FirebaseRecaptcha: Support for defaultProps will be removed']);
 
 export default function App() {
     const [isDbReady, setIsDbReady] = useState(false);
@@ -27,11 +30,7 @@ export default function App() {
     }, []);
 
     if (!isDbReady) {
-        return (
-            <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
-                <ActivityIndicator size="large" color="#2563EB" />
-            </View>
-        );
+        return null; // Or a splash screen
     }
 
     return (

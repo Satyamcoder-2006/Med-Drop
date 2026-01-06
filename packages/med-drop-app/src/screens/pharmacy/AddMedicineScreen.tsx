@@ -4,6 +4,7 @@ import { StatusBar } from 'expo-status-bar';
 import * as Haptics from 'expo-haptics';
 import * as ImagePicker from 'expo-image-picker';
 import { database } from '../../services/DatabaseService';
+import { FirestoreService } from '../../services/FirestoreService';
 import { Patient, Medicine, MedicineSchedule } from '../../types';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import { Image } from 'react-native';
@@ -121,15 +122,12 @@ export default function AddMedicineScreen() {
         if (!query) return;
         setLoading(true);
         try {
-            const patients = await database.getAllPatients();
-            const filtered = patients.filter(p =>
-                p.name.toLowerCase().includes(query.toLowerCase()) ||
-                p.phone.includes(query)
-            );
+            // Search patients from Firestore
+            const patients = await FirestoreService.searchPatients(query);
 
-            // Fetch medicine counts for each patient
-            const resultsWithCount = await Promise.all(filtered.map(async (p) => {
-                const meds = await database.getMedicinesByPatient(p.id);
+            // Fetch medicine counts for each patient from Firestore
+            const resultsWithCount = await Promise.all(patients.map(async (p) => {
+                const meds = await FirestoreService.getMedicines(p.id);
                 return { ...p, medicinesCount: meds.length };
             }));
 
@@ -137,7 +135,7 @@ export default function AddMedicineScreen() {
             await Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
         } catch (error) {
             console.error('Search failed:', error);
-            Alert.alert('Error', 'Failed to search patients');
+            Alert.alert('Error', 'Failed to search patients. Make sure you are connected to the internet.');
         } finally {
             setLoading(false);
         }
@@ -298,8 +296,7 @@ export default function AddMedicineScreen() {
                     };
                 });
 
-                const newMedicine: Medicine = {
-                    id: med.id,
+                const medicineData = {
                     patientId: selectedPatient.id,
                     name: med.name,
                     dosage: med.dosage,
@@ -309,14 +306,17 @@ export default function AddMedicineScreen() {
                     photo: med.photo,
                     daysRemaining: 30,
                     totalDays: 30,
-                    addedBy: 'pharmacy',
+                    addedBy: 'pharmacy' as const,
                     createdAt: new Date(),
                     updatedAt: new Date(),
                     instructions: med.instructions,
                 };
 
-                await database.saveMedicine(newMedicine);
-                // Also save to catalog if it's new or updated with photo
+                // Save to Firestore (cloud)
+                await FirestoreService.addMedicine(selectedPatient.id, medicineData);
+
+                // Also save to local database for offline access
+                await database.saveMedicine({ id: med.id, ...medicineData });
                 await database.saveToCatalog(med.name, med.photo);
             }
 
@@ -326,7 +326,7 @@ export default function AddMedicineScreen() {
             }, 3000);
         } catch (error) {
             console.error('Failed to add medicines:', error);
-            Alert.alert('Error', 'Failed to save prescription');
+            Alert.alert('Error', 'Failed to save prescription. Please check your internet connection.');
         } finally {
             setLoading(false);
         }

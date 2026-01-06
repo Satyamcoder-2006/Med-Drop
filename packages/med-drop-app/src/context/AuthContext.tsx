@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useState, ReactNode } from 'react';
-
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { database } from '../services/DatabaseService';
+import { FirestoreService } from '../services/FirestoreService';
 
 export type UserRole = 'pharmacy' | 'patient' | 'guardian' | null;
 
@@ -10,7 +11,8 @@ interface AuthContextType {
     userId: string;
     userName: string;
     login: (phone: string, role: UserRole) => Promise<void>;
-    logout: () => void;
+    logout: () => Promise<void>;
+    setUserRole: (role: UserRole) => void;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -20,6 +22,31 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     const [isAuthenticated, setIsAuthenticated] = useState(false);
     const [userId, setUserId] = useState('');
     const [userName, setUserName] = useState('');
+    const [isLoading, setIsLoading] = useState(true);
+
+    // Initial load: Restore session from AsyncStorage
+    React.useEffect(() => {
+        const loadSession = async () => {
+            try {
+                const storedUserId = await AsyncStorage.getItem('userId');
+                const storedRole = await AsyncStorage.getItem('userRole') as UserRole;
+                const storedUserName = await AsyncStorage.getItem('userName');
+
+                if (storedUserId && storedRole) {
+                    setUserId(storedUserId);
+                    setUserRole(storedRole);
+                    setIsAuthenticated(true);
+                    setUserName(storedUserName || '');
+                }
+            } catch (error) {
+                console.error('Failed to load session:', error);
+            } finally {
+                setIsLoading(false);
+            }
+        };
+
+        loadSession();
+    }, []);
 
     const login = async (phoneInput: string, role: UserRole) => {
         const phone = phoneInput.trim();
@@ -27,32 +54,37 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
         setUserRole(role);
         setIsAuthenticated(true);
 
+        // Persist to AsyncStorage for manual session management
+        await AsyncStorage.setItem('userId', phone);
+        await AsyncStorage.setItem('userRole', role || '');
+
         if (role === 'patient') {
-            const patients = await database.getAllPatients();
-            const patient = patients.find(p => p.phone === phone || p.id === phone);
-            if (patient) {
-                setUserName(patient.name);
-                setUserId(patient.id); // Use real ID if found
-            } else {
-                setUserName('Patient User');
+            let currentPatient = await FirestoreService.getUser(phone);
+            if (currentPatient) {
+                setUserName(currentPatient.name);
+                await AsyncStorage.setItem('userName', currentPatient.name);
             }
         } else if (role === 'guardian') {
-            const patients = await database.getAllPatients();
-            const linkedPatients = patients.filter(p => p.guardians?.includes(phone));
-            if (linkedPatients.length > 0) {
-                // If the guardian is linked to any patient, we consider them authenticated.
-                // We don't have a separate Guardians table yet, so we use a generic name or find from patient contact
-                setUserName(`Guardian of ${linkedPatients[0].name}`);
-                setUserId(phone);
-            } else {
-                setUserName('Guardian User');
+            const guardian = await FirestoreService.getGuardian(phone);
+            if (guardian) {
+                setUserName(guardian.name);
+                await AsyncStorage.setItem('userName', guardian.name);
             }
         } else if (role === 'pharmacy') {
-            setUserName('Demo Pharmacy');
+            const pharmacy = await FirestoreService.getPharmacy(phone);
+            if (pharmacy) {
+                setUserName(pharmacy.name);
+                await AsyncStorage.setItem('userName', pharmacy.name);
+            }
         }
     };
 
-    const logout = () => {
+    const logout = async () => {
+        // Clear manual session
+        await AsyncStorage.removeItem('userId');
+        await AsyncStorage.removeItem('userRole');
+        await AsyncStorage.removeItem('userName');
+
         setUserRole(null);
         setIsAuthenticated(false);
         setUserId('');
@@ -68,9 +100,10 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
                 userName,
                 login,
                 logout,
+                setUserRole
             }}
         >
-            {children}
+            {!isLoading && children}
         </AuthContext.Provider>
     );
 };
