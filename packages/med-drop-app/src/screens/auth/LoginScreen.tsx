@@ -115,11 +115,7 @@ export default function LoginScreen() {
         }
     };
 
-    const handleSkipLogin = async () => {
-        const testPhone = role === 'pharmacy' ? '+919999999991' :
-            role === 'patient' ? '+919999999992' : '+919999999993';
-        await login(testPhone, role);
-    };
+    // Removed handleSkipLogin
 
     return (
         <KeyboardAvoidingView
@@ -168,13 +164,7 @@ export default function LoginScreen() {
                         <Text style={styles.loginButtonText}>{loading ? 'Logging in...' : 'Login'}</Text>
                     </TouchableOpacity>
 
-                    <TouchableOpacity
-                        style={styles.skipButton}
-                        onPress={handleSkipLogin}
-                        disabled={loading}
-                    >
-                        <Text style={styles.skipButtonText}>Skip Login (Testing)</Text>
-                    </TouchableOpacity>
+                    {/* Removed Skip Login (Testing) button */}
 
                     <View style={styles.signupLink}>
                         <Text style={styles.signupText}>Don't have an account? </Text>
@@ -191,14 +181,7 @@ export default function LoginScreen() {
                     </View>
                 </View>
 
-                {/* Quick Test Credentials */}
-                <View style={styles.testCredentials}>
-                    <Text style={styles.testTitle}>Quick Test Credentials:</Text>
-                    <Text style={styles.testText}>Pharmacist: 9999999991</Text>
-                    <Text style={styles.testText}>Patient: 9999999992</Text>
-                    <Text style={styles.testText}>Guardian: 9999999993</Text>
-                    <Text style={styles.testHint}>* Passwords will be required for new accounts</Text>
-                </View>
+                {/* Removed Quick Test Credentials block */}
             </View>
         </KeyboardAvoidingView>
     );
@@ -256,38 +239,8 @@ const styles = StyleSheet.create({
         fontSize: 18,
         fontWeight: '600',
     },
-    skipButton: {
-        paddingVertical: 12,
-        alignItems: 'center',
-    },
-    skipButtonText: {
-        color: '#6B7280',
-        fontSize: 16,
-    },
-    testCredentials: {
-        backgroundColor: '#FEF3C7',
-        padding: 16,
-        borderRadius: 12,
-        borderWidth: 1,
-        borderColor: '#FCD34D',
-    },
-    testTitle: {
-        fontSize: 14,
-        fontWeight: '600',
-        color: '#92400E',
-        marginBottom: 8,
-    },
-    testText: {
-        fontSize: 13,
-        color: '#92400E',
-        marginBottom: 4,
-    },
-    testHint: {
-        fontSize: 11,
-        fontStyle: 'italic',
-        color: '#92400E',
-        marginTop: 4,
-    },
+    // Removed skipButton and skipButtonText styles
+    // Removed testCredentials, testTitle, testText, testHint styles
     signupLink: {
         flexDirection: 'row',
         justifyContent: 'center',

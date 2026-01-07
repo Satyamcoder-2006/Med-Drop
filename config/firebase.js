@@ -3,21 +3,26 @@
 // Get these from Firebase Console > Project Settings > Your apps > Web app
 
 import { initializeApp } from 'firebase/app';
-import { initializeAuth, getReactNativePersistence } from 'firebase/auth';
-import { getFirestore } from 'firebase/firestore';
+import { initializeAuth, getReactNativePersistence, getAuth } from 'firebase/auth';
+import { initializeFirestore } from 'firebase/firestore';
 import { getFunctions } from 'firebase/functions';
 import { getStorage } from 'firebase/storage';
-import { getMessaging } from 'firebase/messaging';
+import { getMessaging, isSupported } from 'firebase/messaging';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import Constants from 'expo-constants';
+const extra =
+  (Constants?.expoConfig?.extra) ||
+  (Constants?.manifest?.extra) ||
+  {};
 
 // Your web app's Firebase configuration
 const firebaseConfig = {
-    apiKey: "AIzaSyCp8yWb4LftaaE90KhJ9R6myhtLPbVgNs4",
-    authDomain: "med-drop-afbb2.firebaseapp.com",
-    projectId: "med-drop-afbb2",
-    storageBucket: "med-drop-afbb2.firebasestorage.app",
-    messagingSenderId: "815385322710",
-    appId: "1:815385322710:web:951414d973b2bd69e45577"
+    apiKey: extra.MED_DROP_FIREBASE_API_KEY,
+    authDomain: extra.MED_DROP_FIREBASE_AUTH_DOMAIN,
+    projectId: extra.MED_DROP_FIREBASE_PROJECT_ID,
+    storageBucket: extra.MED_DROP_FIREBASE_STORAGE_BUCKET,
+    messagingSenderId: extra.MED_DROP_FIREBASE_MESSAGING_SENDER_ID,
+    appId: extra.MED_DROP_FIREBASE_APP_ID
 };
 
 // Initialize Firebase
@@ -40,8 +45,14 @@ try {
         // Auth might already be initialized
         auth = getAuth(app);
     }
-    db = getFirestore(app);
-    functions = getFunctions(app); // Renamed from firebaseFunctions to match existing declaration
+
+    // Use long polling for Expo/React Native
+    db = initializeFirestore(app, {
+        experimentalForceLongPolling: true,
+        useFetchStreams: false
+    });
+
+    functions = getFunctions(app);
     storage = getStorage(app);
     messaging = null; // Initialize messaging to null
 

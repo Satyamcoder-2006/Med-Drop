@@ -31,9 +31,21 @@ yarn-error.*
 *.pem
 
 # local env files
+# Environment files (do not commit secrets)
 .env
 .env.*
-*.local
+**/.env
+**/.env.*
+# Expo local config
+app.config.local.json
+**/app.config.local.json
+# Build and cache
+.expo
+.expo-shared
+# Firebase credentials (if any local copies)
+serviceAccount*.json
+# Node modules
+node_modules
 firebase-key.json
 service-account.json
 

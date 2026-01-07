@@ -88,13 +88,6 @@ export default function WelcomeScreen() {
                     <Text style={styles.roleIcon}>👨‍👩‍👧</Text>
                     <Text style={styles.roleText}>I AM A GUARDIAN</Text>
                 </TouchableOpacity>
-
-                <TouchableOpacity
-                    style={styles.devButton}
-                    onPress={handleReset}
-                >
-                    <Text style={styles.devButtonText}>🛠️ DEVELOPER: RESET DATABASE</Text>
-                </TouchableOpacity>
             </View>
         </View>
     );
@@ -165,6 +158,7 @@ const styles = StyleSheet.create({
         fontWeight: '600',
         color: '#FFFFFF',
     },
+    // Removed devButton and devButtonText styles
     devButton: {
         marginTop: 20,
         padding: 10,

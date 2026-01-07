@@ -5,7 +5,7 @@ import {
     TouchableOpacity,
     StyleSheet,
     ScrollView,
-    Alert,
+     Alert,
     TextInput,
 } from 'react-native';
 import { useNavigation } from '@react-navigation/native';

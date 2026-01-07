@@ -1,18 +1,22 @@
 import { initializeApp, getApp, getApps, FirebaseApp } from 'firebase/app';
 import { getAuth, Auth } from 'firebase/auth';
-import { getFirestore, Firestore } from 'firebase/firestore';
+import { initializeFirestore, Firestore } from 'firebase/firestore';
 import { getStorage, FirebaseStorage } from 'firebase/storage';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-
+import Constants from 'expo-constants';
+const extra =
+  (Constants?.expoConfig?.extra) ||
+  (Constants?.manifest?.extra) ||
+  {};
 // TODO: Replace with your actual Firebase configuration from the Firebase Console
 export const firebaseConfig = {
-    apiKey: "AIzaSyBiLioNwGgp_tg6D2QzNbLc6GXKS8v-7E4",
-    authDomain: "med-drop-app.firebaseapp.com",
-    projectId: "med-drop-app",
-    storageBucket: "med-drop-app.firebasestorage.app",
-    messagingSenderId: "967638864464",
-    appId: "1:967638864464:web:efdcc6635ad8227a653755",
-    measurementId: "G-9KYLY7M6Z9"
+    apiKey: extra.MED_DROP_FIREBASE_API_KEY,
+    authDomain: extra.MED_DROP_FIREBASE_AUTH_DOMAIN,
+    projectId: extra.MED_DROP_FIREBASE_PROJECT_ID,
+    storageBucket: extra.MED_DROP_FIREBASE_STORAGE_BUCKET,
+    messagingSenderId: extra.MED_DROP_FIREBASE_MESSAGING_SENDER_ID,
+    appId: extra.MED_DROP_FIREBASE_APP_ID,
+    measurementId: extra.MED_DROP_FIREBASE_MEASUREMENT_ID
 };
 
 let app: FirebaseApp;
@@ -28,7 +32,11 @@ try {
         auth = getAuth(app);
     }
 
-    db = getFirestore(app);
+    // Use long polling for Expo/React Native
+    db = initializeFirestore(app, {
+        experimentalForceLongPolling: true,
+        useFetchStreams: false
+    });
 } catch (error) {
     console.error("Firebase initialization error:", error);
     throw error;

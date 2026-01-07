@@ -131,17 +131,6 @@ export default function DashboardScreen() {
                         <Text style={styles.actionIcon}>💊</Text>
                         <Text style={styles.actionText}>Add Medicine to Patient</Text>
                     </TouchableOpacity>
-
-                    <TouchableOpacity
-                        style={[styles.actionButton, { backgroundColor: '#8B5CF6' }]}
-                        onPress={() => {
-                            // Navigate to scan prescription
-                            console.log('Scan prescription');
-                        }}
-                    >
-                        <Text style={styles.actionIcon}>📸</Text>
-                        <Text style={styles.actionText}>Scan Prescription</Text>
-                    </TouchableOpacity>
                 </View>
 
                 {/* Recent Patients */}
