@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput, Alert } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput, Alert, Image, ActivityIndicator } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import * as Haptics from 'expo-haptics';
 import * as ImagePicker from 'expo-image-picker';
@@ -7,11 +7,14 @@ import { database } from '../../services/DatabaseService';
 import { FirestoreService } from '../../services/FirestoreService';
 import { Patient, Medicine, MedicineSchedule } from '../../types';
 import { useNavigation, useRoute } from '@react-navigation/native';
-import { Image } from 'react-native';
+import { useAuth } from '../../context/AuthContext';
+import * as FileSystem from 'expo-file-system';
+import { GeminiService } from '../../services/GeminiService';
 
 export default function AddMedicineScreen() {
     const navigation = useNavigation();
     const route = useRoute();
+    const { userId } = useAuth();
     const editingMedicine = (route.params as any)?.medicine as Medicine | undefined;
     const editingPatient = (route.params as any)?.patient as Patient | undefined;
 
@@ -38,6 +41,35 @@ export default function AddMedicineScreen() {
     const [selectedPatient, setSelectedPatient] = useState<Patient | null>(null);
     const [searchResults, setSearchResults] = useState<(Patient & { medicinesCount: number })[]>([]);
     const [loading, setLoading] = useState(false);
+    const [isScanOptionsVisible, setIsScanOptionsVisible] = useState(false);
+
+    // Track which pending list item is currently being edited (null when not editing a list item)
+    const [editingPendingId, setEditingPendingId] = useState<string | null>(null);
+
+    // Commit any in-progress edits of the currently edited pending item back to the list
+    const commitEditingPending = () => {
+        if (!editingPendingId) return;
+
+        // Only commit if the form is valid (mirrors Add-to-List requirements)
+        if (!medicineName || !dosage || selectedMeal.length === 0) return;
+
+        setPendingMedicines(prev =>
+            prev.map(m =>
+                m.id === editingPendingId
+                    ? {
+                          ...m,
+                          name: medicineName,
+                          dosage,
+                          meals: [...selectedMeal],
+                          mealTimes: { ...mealTimes },
+                          relation: mealRelation,
+                          instructions: `${mealRelation} meals`,
+                          photo: medPhoto,
+                      }
+                    : m
+            )
+        );
+    };
 
     useEffect(() => {
         if (editingMedicine && editingPatient) {
@@ -168,6 +200,119 @@ export default function AddMedicineScreen() {
         Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     };
 
+    const handleEditPending = (med: PendingMedicine) => {
+        // If we were already editing another item, commit its changes before switching
+        if (editingPendingId && editingPendingId !== med.id) {
+            commitEditingPending();
+        }
+
+        // Mark this item as the one being edited and populate the form
+        setEditingPendingId(med.id);
+        setMedicineName(med.name);
+        setDosage(med.dosage);
+        setSelectedMeal(med.meals);
+        setMealTimes(med.mealTimes);
+        setMealRelation(med.relation);
+        setMedPhoto(med.photo);
+
+        // Do NOT remove the item from the list anymore
+        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    };
+
+    const handleScanPrescription = () => {
+        setIsScanOptionsVisible(!isScanOptionsVisible);
+        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    };
+
+    const handleCameraCapture = async () => {
+        const { status } = await ImagePicker.requestCameraPermissionsAsync();
+        if (status !== 'granted') {
+            Alert.alert('Permission needed', 'Camera permissions are required.');
+            return;
+        }
+        const result = await ImagePicker.launchCameraAsync({
+            mediaTypes: ImagePicker.MediaTypeOptions.Images,
+            allowsEditing: true, // Optional: Let user crop to specific area
+            quality: 0.8,
+        });
+        if (!result.canceled) {
+            setIsScanOptionsVisible(false);
+            processPrescriptionImage(result.assets[0].uri);
+        }
+    };
+
+    const handleGalleryPick = async () => {
+        const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+        if (status !== 'granted') {
+            Alert.alert('Permission needed', 'Gallery permissions are required.');
+            return;
+        }
+        const result = await ImagePicker.launchImageLibraryAsync({
+            mediaTypes: ImagePicker.MediaTypeOptions.Images,
+            allowsEditing: true,
+            quality: 0.8,
+        });
+        if (!result.canceled) {
+            setIsScanOptionsVisible(false);
+            processPrescriptionImage(result.assets[0].uri);
+        }
+    };
+
+    const processPrescriptionImage = async (uri: string) => {
+        console.log("Processing image:", uri);
+        setLoading(true);
+        try {
+            // Read image as Base64 for Gemini
+            console.log("Reading file as Base64...");
+            const base64 = await FileSystem.readAsStringAsync(uri, {
+                encoding: FileSystem.EncodingType.Base64,
+            });
+            console.log("Base64 length:", base64.length);
+
+            // Call Gemini Service directly
+            console.log("Calling GeminiService...");
+            const data = await GeminiService.scanPrescription(base64);
+            console.log("Gemini response:", JSON.stringify(data));
+
+            if (data?.medicines && Array.isArray(data.medicines)) {
+                if (data.medicines.length === 1) {
+                    // Single match: Determine name and dosage, then populate form
+                    const m = data.medicines[0];
+                    setMedicineName(m.name || 'Unknown');
+                    setDosage(m.dosage || '');
+                    // We don't auto-add to list, giving user chance to verify/add photo
+                    Alert.alert('Medicine Found', 'Detected ' + m.name + '. Please verify details and add photo.');
+                    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+                } else {
+                    // Multiple matches: Add to pending list
+                    const newMedicines: PendingMedicine[] = data.medicines.map((m: any) => ({
+                        id: `med_${Date.now()}_${Math.random()}`,
+                        name: m.name || 'Unknown',
+                        dosage: m.dosage || '',
+                        meals: [], // AI extracts timeOfDay, need to map manually or ask user
+                        mealTimes: { ...DEFAULT_MEAL_TIMES },
+                        relation: 'after', // Default
+                        instructions: `Take ${m.frequency || 'as directed'} ${m.timeOfDay || ''}`,
+                        photo: undefined
+                    }));
+
+                    setPendingMedicines(prev => [...prev, ...newMedicines]);
+                    Alert.alert('Scan Complete', `Extracted ${newMedicines.length} medicines. Tap on a medicine in the list to edit its details.`);
+                    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+                }
+            } else {
+                console.warn("No medicines found in response");
+                Alert.alert('No Medicines Found', 'Could not detect any medicines in the image.');
+            }
+
+        } catch (error: any) {
+            console.error('Scan failed:', error);
+            Alert.alert('Scan Failed', 'Could not analyze prescription. Please try again.');
+        } finally {
+            setLoading(false);
+        }
+    };
+
     const pickImage = async () => {
         Alert.alert(
             'Add Photo',
@@ -224,23 +369,47 @@ export default function AddMedicineScreen() {
     const addMedicineToList = () => {
         if (!medicineName || !dosage || selectedMeal.length === 0) return;
 
-        const newMed: PendingMedicine = {
-            id: `med_${Date.now()}`,
-            name: medicineName,
-            dosage,
-            meals: [...selectedMeal],
-            mealTimes: { ...mealTimes },
-            relation: mealRelation,
-            instructions: `${mealRelation} meals`,
-            photo: medPhoto,
-        };
+        if (editingPendingId) {
+            // Update the currently edited item in place
+            setPendingMedicines(prev =>
+                prev.map(m =>
+                    m.id === editingPendingId
+                        ? {
+                              ...m,
+                              name: medicineName,
+                              dosage,
+                              meals: [...selectedMeal],
+                              mealTimes: { ...mealTimes },
+                              relation: mealRelation,
+                              instructions: `${mealRelation} meals`,
+                              photo: medPhoto,
+                          }
+                        : m
+                )
+            );
 
-        // Save to catalog
+            // Clear editing state after saving
+            setEditingPendingId(null);
+        } else {
+            // Add a new medicine to the list
+            const newMed: PendingMedicine = {
+                id: `med_${Date.now()}`,
+                name: medicineName,
+                dosage,
+                meals: [...selectedMeal],
+                mealTimes: { ...mealTimes },
+                relation: mealRelation,
+                instructions: `${mealRelation} meals`,
+                photo: medPhoto,
+            };
+
+            setPendingMedicines([...pendingMedicines, newMed]);
+        }
+
+        // Save to catalog for future suggestions
         database.saveToCatalog(medicineName, medPhoto);
 
-        setPendingMedicines([...pendingMedicines, newMed]);
-
-        // Reset form for next medicine
+        // Reset form for next medicine or after saving changes
         setMedicineName('');
         setDosage('');
         setSelectedMeal([]);
@@ -259,9 +428,13 @@ export default function AddMedicineScreen() {
     const handleSubmit = async () => {
         if (!selectedPatient) return;
 
-        // Include the current form if it's not empty, or only use pending list
+        // Ensure any in-progress edits are committed to the list before submitting
+        commitEditingPending();
+
+        // Start with the pending list; only include the current form when not editing a list item
         const allMedicinesToSave: PendingMedicine[] = [...pendingMedicines];
-        if (medicineName && dosage && selectedMeal.length > 0) {
+
+        if (!editingPendingId && medicineName && dosage && selectedMeal.length > 0) {
             allMedicinesToSave.push({
                 id: editingMedicine?.id || `med_${Date.now()}`,
                 name: medicineName,
@@ -281,6 +454,34 @@ export default function AddMedicineScreen() {
 
         setLoading(true);
         try {
+            // Check for duplicate medicines associated with this patient
+            const existingMedicines = await FirestoreService.getMedicines(selectedPatient.id);
+            const duplicates = allMedicinesToSave.filter(newMed => {
+                // Check against existing medicines (excluding the one being edited if applicable)
+                const existsInDatabase = existingMedicines.some(existing =>
+                    existing.name.toLowerCase() === newMed.name.trim().toLowerCase() &&
+                    existing.id !== newMed.id // Allow editing the same medicine
+                );
+
+                // Check against other medicines in the current batch (allMedicinesToSave)
+                // We only care if it appears MORE THAN ONCE in the current batch
+                const existsInBatch = allMedicinesToSave.filter(m =>
+                    m.name.toLowerCase() === newMed.name.trim().toLowerCase()
+                ).length > 1;
+
+                return existsInDatabase || existsInBatch;
+            });
+
+            if (duplicates.length > 0) {
+                const uniqueDebouncedNames = [...new Set(duplicates.map(d => d.name))];
+                Alert.alert(
+                    'Duplicate Medicine',
+                    `The following medicine(s) are already added for this patient: ${uniqueDebouncedNames.join(', ')}. Please remove or edit them.`
+                );
+                setLoading(false);
+                return;
+            }
+
             await Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
 
             for (const med of allMedicinesToSave) {
@@ -303,10 +504,11 @@ export default function AddMedicineScreen() {
                     schedule,
                     isCritical: false,
                     color: '#3B82F6',
-                    photo: med.photo,
+                    photo: (med.photo || null) as any,
                     daysRemaining: 30,
                     totalDays: 30,
                     addedBy: 'pharmacy' as const,
+                    pharmacyId: userId,
                     createdAt: new Date(),
                     updatedAt: new Date(),
                     instructions: med.instructions,
@@ -368,27 +570,47 @@ export default function AddMedicineScreen() {
                 </View>
 
                 <ScrollView contentContainerStyle={styles.content}>
+                    {/* Scan Action */}
+                    <TouchableOpacity style={styles.scanButton} onPress={handleScanPrescription}>
+                        <Text style={styles.scanButtonIcon}>📸</Text>
+                        <Text style={styles.scanButtonText}>Scan Prescription with AI</Text>
+                    </TouchableOpacity>
+
+                    {/* Inline Scan Options */}
+                    {isScanOptionsVisible && (
+                        <View style={styles.scanOptionsContainer}>
+                            <TouchableOpacity style={styles.optionButton} onPress={handleCameraCapture}>
+                                <Text style={styles.optionIcon}>📷</Text>
+                                <Text style={styles.optionText}>Take Photo</Text>
+                            </TouchableOpacity>
+                            <TouchableOpacity style={[styles.optionButton, styles.optionButtonOutline]} onPress={handleGalleryPick}>
+                                <Text style={styles.optionIcon}>🖼️</Text>
+                                <Text style={[styles.optionText, styles.optionTextOutline]}>Upload from Gallery</Text>
+                            </TouchableOpacity>
+                        </View>
+                    )}
                     {/* Prescription List Section */}
                     {pendingMedicines.length > 0 && (
                         <View style={styles.pendingListContainer}>
                             <Text style={styles.sectionHeading}>Current Prescription ({pendingMedicines.length})</Text>
                             {pendingMedicines.map((med) => (
-                                <View key={med.id} style={styles.pendingItem}>
+                                <TouchableOpacity key={med.id} style={styles.pendingItem} onPress={() => handleEditPending(med)}>
                                     {med.photo ? (
                                         <Image source={{ uri: med.photo }} style={styles.pendingItemThumb} />
                                     ) : (
                                         <View style={styles.pendingItemThumbPlaceholder}>
-                                            <Text style={{ fontSize: 12 }}>💊</Text>
+                                            <Text style={{ fontSize: 12 }}>✏️</Text>
                                         </View>
                                     )}
                                     <View style={styles.pendingItemInfo}>
                                         <Text style={styles.pendingItemName}>{med.name}</Text>
-                                        <Text style={styles.pendingItemDetails}>{med.dosage} • {med.meals.join(', ')}</Text>
+                                        <Text style={styles.pendingItemDetails}>{med.dosage ? med.dosage : 'No dosage'} • {med.meals.length > 0 ? med.meals.join(', ') : 'No meals'}</Text>
+                                        <Text style={{ fontSize: 10, color: '#3B82F6', marginTop: 2 }}>Tap to Edit</Text>
                                     </View>
                                     <TouchableOpacity onPress={() => removeMedicine(med.id)} style={styles.removeButton}>
                                         <Text style={styles.removeButtonText}>✕</Text>
                                     </TouchableOpacity>
-                                </View>
+                                </TouchableOpacity>
                             ))}
                         </View>
                     )}
@@ -542,7 +764,9 @@ export default function AddMedicineScreen() {
                             onPress={addMedicineToList}
                             disabled={!medicineName || !dosage || selectedMeal.length === 0}
                         >
-                            <Text style={styles.addToListButtonText}>+ Add to Prescription</Text>
+                            <Text style={styles.addToListButtonText}>
+                                {editingPendingId ? 'Save Changes' : '+ Add to Prescription'}
+                            </Text>
                         </TouchableOpacity>
                     </View>
 
@@ -626,18 +850,8 @@ export default function AddMedicineScreen() {
                         <Text style={styles.noResultsIcon}>🔍</Text>
                         <Text style={styles.noResultsTitle}>No patients found</Text>
                         <Text style={styles.noResultsText}>
-                            Patient "{searchQuery}" is not registered in the system.
+                            Patient "{searchQuery}" is not registered. Please ask the patient or their guardian to register first through the Med Drop app.
                         </Text>
-                        <TouchableOpacity
-                            style={styles.registerButton}
-                            onPress={() => {
-                                (navigation as any).navigate('Register');
-                            }}
-                        >
-                            <Text style={styles.registerButtonText}>
-                                ➕ Register New Patient
-                            </Text>
-                        </TouchableOpacity>
                     </View>
                 )}
 
@@ -647,23 +861,8 @@ export default function AddMedicineScreen() {
                         <Text style={styles.initialIcon}>👥</Text>
                         <Text style={styles.initialTitle}>Search for a Patient</Text>
                         <Text style={styles.initialText}>
-                            Enter patient name or phone number to find existing patients
+                            Enter patient name or phone number to find existing patients and add their prescriptions.
                         </Text>
-                        <View style={styles.divider}>
-                            <View style={styles.dividerLine} />
-                            <Text style={styles.dividerText}>OR</Text>
-                            <View style={styles.dividerLine} />
-                        </View>
-                        <TouchableOpacity
-                            style={styles.newPatientButton}
-                            onPress={() => {
-                                (navigation as any).navigate('Register');
-                            }}
-                        >
-                            <Text style={styles.newPatientButtonText}>
-                                ➕ Register New Patient
-                            </Text>
-                        </TouchableOpacity>
                     </View>
                 )}
             </ScrollView>
@@ -1039,6 +1238,59 @@ const styles = StyleSheet.create({
     },
     pendingItemInfo: {
         flex: 1,
+    },
+    scanButton: {
+        backgroundColor: '#8B5CF6',
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+        padding: 16,
+        borderRadius: 12,
+        marginBottom: 20,
+        gap: 8,
+        zIndex: 10,
+        elevation: 2,
+    },
+    scanOptionsContainer: {
+        flexDirection: 'row',
+        gap: 12,
+        marginBottom: 20,
+        marginTop: -10,
+    },
+    optionButton: {
+        flex: 1,
+        backgroundColor: '#F3F4F6',
+        borderRadius: 12,
+        padding: 16,
+        alignItems: 'center',
+        justifyContent: 'center',
+        borderWidth: 1,
+        borderColor: '#E5E7EB',
+    },
+    optionButtonOutline: {
+        backgroundColor: '#FFFFFF',
+        borderStyle: 'dashed',
+        borderColor: '#8B5CF6',
+    },
+    optionIcon: {
+        fontSize: 24,
+        marginBottom: 8,
+    },
+    optionText: {
+        fontSize: 14,
+        fontWeight: '600',
+        color: '#1F2937',
+    },
+    optionTextOutline: {
+        color: '#8B5CF6',
+    },
+    scanButtonIcon: {
+        fontSize: 20,
+    },
+    scanButtonText: {
+        color: '#FFFFFF',
+        fontSize: 16,
+        fontWeight: 'bold',
     },
     pendingItemName: {
         fontSize: 16,

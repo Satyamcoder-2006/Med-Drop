@@ -275,7 +275,8 @@ export default function DashboardScreen() {
                                     </TouchableOpacity>
                                 </View>
                             </TouchableOpacity>
-                        )))}
+                        ))
+                    )}
                 </View>
             </ScrollView>
         </View>

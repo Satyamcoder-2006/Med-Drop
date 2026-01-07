@@ -4,7 +4,6 @@ import { createStackNavigator } from '@react-navigation/stack';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import DashboardScreen from '../screens/pharmacy/DashboardScreen';
 import AddMedicineScreen from '../screens/pharmacy/AddMedicineScreen';
-import RegisterPatientScreen from '../screens/pharmacy/RegisterPatientScreen';
 import ProfileScreen from '../screens/auth/ProfileScreen';
 
 const Stack = createStackNavigator();
@@ -31,11 +30,6 @@ export default function PharmacyNavigator() {
                 name="Dashboard"
                 component={DashboardStack}
                 options={{ tabBarLabel: 'Dashboard', tabBarIcon: () => <Text>📊</Text> }}
-            />
-            <Tab.Screen
-                name="Register"
-                component={RegisterPatientScreen}
-                options={{ tabBarLabel: 'Register', tabBarIcon: () => <Text>➕</Text> }}
             />
             <Tab.Screen
                 name="Profile"

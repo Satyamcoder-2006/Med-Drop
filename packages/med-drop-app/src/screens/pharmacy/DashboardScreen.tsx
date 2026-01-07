@@ -9,7 +9,7 @@ import { Patient, Medicine } from '../../types';
 import { useNavigation } from '@react-navigation/native';
 
 export default function DashboardScreen() {
-    const { userName } = useAuth();
+    const { userName, userId } = useAuth();
     const navigation = useNavigation();
     const [patients, setPatients] = useState<(Patient & { medicines: Medicine[] })[]>([]);
     const [loading, setLoading] = useState(true);
@@ -17,17 +17,18 @@ export default function DashboardScreen() {
     useFocusEffect(
         useCallback(() => {
             loadData();
-        }, [])
+        }, [userId])
     );
 
     const loadData = async () => {
+        if (!userId) return;
         try {
-            // Fetch patients from Firestore
-            const patientsData = await FirestoreService.getAllPatients();
+            // Fetch only patients served by this pharmacy
+            const patientsData = await FirestoreService.getPatientsByPharmacy(userId);
 
-            // Enrich patients with their medicines from Firestore
+            // Enrich patients with their medicines from this pharmacy only
             const enrichedPatients = await Promise.all(patientsData.map(async (p) => {
-                const meds = await FirestoreService.getMedicines(p.id);
+                const meds = await FirestoreService.getMedicinesByPharmacy(p.id, userId);
                 return { ...p, medicines: meds };
             }));
 
@@ -49,6 +50,9 @@ export default function DashboardScreen() {
                     text: 'Delete',
                     style: 'destructive',
                     onPress: async () => {
+                        // Remove from Firestore (users + nested collections)
+                        await FirestoreService.deleteUser(id);
+                        // Also remove from local DB
                         await database.deletePatient(id);
                         loadData();
                     }
@@ -57,7 +61,7 @@ export default function DashboardScreen() {
         );
     };
 
-    const handleDeleteMedicine = async (id: string, name: string) => {
+    const handleDeleteMedicine = async (patientId: string, id: string, name: string) => {
         Alert.alert(
             'Delete Medicine',
             `Are you sure you want to delete ${name}?`,
@@ -67,6 +71,9 @@ export default function DashboardScreen() {
                     text: 'Delete',
                     style: 'destructive',
                     onPress: async () => {
+                        // Remove from Firestore first
+                        await FirestoreService.deleteMedicine(patientId, id);
+                        // Also remove locally
                         await database.deleteMedicine(id);
                         loadData();
                     }
@@ -100,7 +107,7 @@ export default function DashboardScreen() {
                 <View style={styles.statsRow}>
                     <View style={[styles.statCard, { backgroundColor: '#D1FAE5' }]}>
                         <Text style={styles.statNumber}>{patients.length}</Text>
-                        <Text style={styles.statLabel}>Registered Patients</Text>
+                        <Text style={styles.statLabel}>Patients Helped</Text>
                     </View>
                     <View style={[styles.statCard, { backgroundColor: '#DBEAFE' }]}>
                         <Text style={styles.statNumber}>{totalPrescriptions}</Text>
@@ -115,16 +122,6 @@ export default function DashboardScreen() {
                 {/* Quick Actions */}
                 <View style={styles.actionsSection}>
                     <Text style={styles.sectionTitle}>Quick Actions</Text>
-                    <TouchableOpacity
-                        style={[styles.actionButton, { backgroundColor: '#10B981' }]}
-                        onPress={() => {
-                            (navigation as any).navigate('Register');
-                        }}
-                    >
-                        <Text style={styles.actionIcon}>➕</Text>
-                        <Text style={styles.actionText}>Register New Patient</Text>
-                    </TouchableOpacity>
-
                     <TouchableOpacity
                         style={[styles.actionButton, { backgroundColor: '#3B82F6' }]}
                         onPress={() => {
@@ -158,12 +155,6 @@ export default function DashboardScreen() {
                                     <Text style={styles.patientPhone}>{patient.phone}</Text>
                                 </View>
                                 <View style={styles.patientActions}>
-                                    <TouchableOpacity
-                                        style={styles.actionIconBtn}
-                                        onPress={() => (navigation as any).navigate('Register', { patient })}
-                                    >
-                                        <Text style={styles.iconBtnText}>✏️</Text>
-                                    </TouchableOpacity>
                                     <TouchableOpacity
                                         style={styles.actionIconBtn}
                                         onPress={() => handleDeletePatient(patient.id, patient.name)}
@@ -200,7 +191,7 @@ export default function DashboardScreen() {
                                             </TouchableOpacity>
                                             <TouchableOpacity
                                                 style={styles.medicineDeleteBtn}
-                                                onPress={() => handleDeleteMedicine(medicine.id, medicine.name)}
+                                                onPress={() => handleDeleteMedicine(patient.id, medicine.id, medicine.name)}
                                             >
                                                 <Text style={styles.deleteIconText}>✕</Text>
                                             </TouchableOpacity>

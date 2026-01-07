@@ -67,6 +67,18 @@ export const FirestoreService = {
         }
     },
 
+    getPatientsByPharmacy: async (pharmacyId: string) => {
+        try {
+            const usersRef = collection(db, 'users');
+            const q = query(usersRef, where('pharmacies', 'array-contains', pharmacyId));
+            const snapshot = await getDocs(q);
+            return snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Patient));
+        } catch (error) {
+            console.error("Error getting patients by pharmacy:", error);
+            throw error;
+        }
+    },
+
     // --- Pharmacies ---
     createPharmacy: async (data: Pharmacy) => {
         try {
@@ -111,6 +123,59 @@ export const FirestoreService = {
         }
     },
 
+    // Allow overlapping roles: auto-provision missing role docs
+    ensureGuardianFromPatient: async (guardianPhone: string): Promise<boolean> => {
+        try {
+            const guardian = await FirestoreService.getGuardian(guardianPhone);
+            if (guardian) return true;
+
+            const patient = await FirestoreService.getUser(guardianPhone);
+            if (!patient) return false;
+
+            await FirestoreService.createGuardian({
+                id: guardianPhone,
+                name: patient.name || '',
+                phone: guardianPhone,
+                patients: [],
+                // carry over password to keep login consistent across roles
+                password: (patient as any).password,
+                createdAt: Timestamp.now(),
+                updatedAt: Timestamp.now()
+            } as Guardian);
+
+            return true;
+        } catch (error) {
+            console.error("Error ensuring guardian from patient:", error);
+            return false;
+        }
+    },
+
+    ensurePatientFromGuardian: async (patientPhone: string): Promise<boolean> => {
+        try {
+            const patient = await FirestoreService.getUser(patientPhone);
+            if (patient) return true;
+
+            const guardian = await FirestoreService.getGuardian(patientPhone);
+            if (!guardian) return false;
+
+            await FirestoreService.createOrUpdateUser({
+                id: patientPhone,
+                name: (guardian as any).name || '',
+                phone: patientPhone,
+                guardians: [],
+                // carry over password to keep login consistent across roles
+                password: (guardian as any).password,
+                createdAt: Timestamp.now(),
+                updatedAt: Timestamp.now()
+            } as any);
+
+            return true;
+        } catch (error) {
+            console.error("Error ensuring patient from guardian:", error);
+            return false;
+        }
+    },
+
     // --- Role Check ---
     checkUserRole: async (phone: string, role: string): Promise<boolean> => {
         try {
@@ -119,10 +184,16 @@ export const FirestoreService = {
                 return !!p;
             } else if (role === 'patient') {
                 const p = await FirestoreService.getUser(phone);
-                return !!p;
+                if (p) return true;
+                // If only guardian exists, auto-provision as patient
+                const ensured = await FirestoreService.ensurePatientFromGuardian(phone);
+                return ensured;
             } else if (role === 'guardian') {
                 const g = await FirestoreService.getGuardian(phone);
-                return !!g;
+                if (g) return true;
+                // If only patient exists, auto-provision as guardian
+                const ensured = await FirestoreService.ensureGuardianFromPatient(phone);
+                return ensured;
             }
             return false;
         } catch (error) {
@@ -138,8 +209,24 @@ export const FirestoreService = {
                 userData = await FirestoreService.getPharmacy(phone);
             } else if (role === 'patient') {
                 userData = await FirestoreService.getUser(phone);
+                // If patient doc missing, try guardian doc and provision patient on success
+                if (!userData) {
+                    const guardianData = await FirestoreService.getGuardian(phone);
+                    if (guardianData && guardianData.password === password) {
+                        await FirestoreService.ensurePatientFromGuardian(phone);
+                        return true;
+                    }
+                }
             } else if (role === 'guardian') {
                 userData = await FirestoreService.getGuardian(phone);
+                // If guardian doc missing, try patient doc and provision guardian on success
+                if (!userData) {
+                    const patientData = await FirestoreService.getUser(phone);
+                    if (patientData && patientData.password === password) {
+                        await FirestoreService.ensureGuardianFromPatient(phone);
+                        return true;
+                    }
+                }
             }
 
             if (!userData) return false;
@@ -156,21 +243,29 @@ export const FirestoreService = {
             // 1. Verify Patient Existence and Password
             const patient = await FirestoreService.getUser(patientPhone);
             if (!patient) {
-                return { success: false, message: "Patient not found. Please check the phone number." };
+                // If guardian-only account exists, auto-provision patient
+                const ensuredPatient = await FirestoreService.ensurePatientFromGuardian(patientPhone);
+                if (!ensuredPatient) {
+                    return { success: false, message: "Patient not found. Please check the phone number." };
+                }
             }
-
-            if (patient.password !== patientPassword) {
+            const verifiedPatient = await FirestoreService.getUser(patientPhone);
+            if (!verifiedPatient || verifiedPatient.password !== patientPassword) {
                 return { success: false, message: "Incorrect patient password." };
             }
 
-            // 2. Fetch Guardian
-            const guardian = await FirestoreService.getGuardian(guardianPhone);
+            // 2. Ensure Guardian exists (auto-provision from patient if needed)
+            let guardian = await FirestoreService.getGuardian(guardianPhone);
             if (!guardian) {
-                return { success: false, message: "Guardian not found." };
+                const ensuredGuardian = await FirestoreService.ensureGuardianFromPatient(guardianPhone);
+                if (!ensuredGuardian) {
+                    return { success: false, message: "Guardian not found. Please ask them to enable guardian role or verify phone." };
+                }
+                guardian = await FirestoreService.getGuardian(guardianPhone);
             }
 
             // 3. Update Patient's guardians list
-            const updatedPatientGuardians = [...(patient.guardians || [])];
+            const updatedPatientGuardians = [...(verifiedPatient.guardians || [])];
             if (!updatedPatientGuardians.includes(guardianPhone)) {
                 updatedPatientGuardians.push(guardianPhone);
                 await updateDoc(doc(db, 'users', patientPhone), {
@@ -243,6 +338,23 @@ export const FirestoreService = {
                 ...medicine,
                 createdAt: Timestamp.now()
             });
+
+            // If added by a pharmacy, ensure the patient is linked to this pharmacy
+            if (medicine.addedBy === 'pharmacy' && medicine.pharmacyId) {
+                const userRef = doc(db, 'users', userId);
+                const userSnap = await getDoc(userRef);
+                if (userSnap.exists()) {
+                    const userData = userSnap.data() as Patient;
+                    const existingPharmacies = userData.pharmacies || [];
+                    if (!existingPharmacies.includes(medicine.pharmacyId)) {
+                        await updateDoc(userRef, {
+                            pharmacies: [...existingPharmacies, medicine.pharmacyId],
+                            updatedAt: Timestamp.now()
+                        });
+                    }
+                }
+            }
+
             return docRef.id;
         } catch (error) {
             console.error("Error adding medicine:", error);
@@ -270,6 +382,18 @@ export const FirestoreService = {
             return snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Medicine));
         } catch (error) {
             console.error("Error getting medicines:", error);
+            throw error;
+        }
+    },
+
+    getMedicinesByPharmacy: async (userId: string, pharmacyId: string) => {
+        try {
+            const medicinesRef = collection(db, 'users', userId, 'medicines');
+            const q = query(medicinesRef, where('pharmacyId', '==', pharmacyId));
+            const snapshot = await getDocs(q);
+            return snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Medicine));
+        } catch (error) {
+            console.error("Error getting medicines by pharmacy:", error);
             throw error;
         }
     },
@@ -561,5 +685,61 @@ export const FirestoreService = {
             console.error("Error getting symptom reports:", error);
             throw error;
         }
-    }
+    },
+    deleteMedicine: async (userId: string, medicineId: string) => {
+        try {
+            const medicineRef = doc(db, 'users', userId, 'medicines', medicineId);
+            await deleteDoc(medicineRef);
+        } catch (error) {
+            console.error('Error deleting medicine:', error);
+            throw error;
+        }
+    },
+
+    deleteUser: async (userId: string) => {
+        try {
+            // Delete sub-collections first
+            const medsSnap = await getDocs(collection(db, 'users', userId, 'medicines'));
+            for (const m of medsSnap.docs) {
+                await deleteDoc(doc(db, 'users', userId, 'medicines', m.id));
+            }
+
+            const logsSnap = await getDocs(collection(db, 'users', userId, 'logs'));
+            for (const l of logsSnap.docs) {
+                await deleteDoc(doc(db, 'users', userId, 'logs', l.id));
+            }
+
+            // Delete user document
+            await deleteDoc(doc(db, 'users', userId));
+        } catch (error) {
+            console.error('Error deleting user:', error);
+            throw error;
+        }
+    },
+
+    changePassword: async (role: 'pharmacy' | 'patient' | 'guardian', userId: string, newPassword: string) => {
+        try {
+            const coll = role === 'pharmacy' ? 'pharmacies' : role === 'guardian' ? 'guardians' : 'users';
+            const ref = doc(db, coll, userId);
+            await setDoc(ref, { password: newPassword, updatedAt: Timestamp.now() }, { merge: true });
+        } catch (error) {
+            console.error('Error changing password:', error);
+            throw error;
+        }
+    },
+
+    deleteAccount: async (role: 'pharmacy' | 'patient' | 'guardian', userId: string) => {
+        try {
+            if (role === 'patient') {
+                // Full patient cleanup
+                await FirestoreService.deleteUser(userId);
+            } else {
+                const coll = role === 'pharmacy' ? 'pharmacies' : 'guardians';
+                await deleteDoc(doc(db, coll, userId));
+            }
+        } catch (error) {
+            console.error('Error deleting account:', error);
+            throw error;
+        }
+    },
 };

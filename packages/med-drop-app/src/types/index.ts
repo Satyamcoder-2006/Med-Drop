@@ -6,6 +6,7 @@ export interface Patient {
   age: number;
   gender: 'male' | 'female' | 'other';
   guardians: string[]; // Guardian IDs
+  pharmacies?: string[]; // Pharmacy IDs (Phone numbers)
   linkedPharmacy?: string;
   language: string; // ISO code: hi, en, ta, te, bn, mr, gu, kn, ml, pa
   emergencyContact?: string;
@@ -29,6 +30,7 @@ export interface Medicine {
   daysRemaining: number;
   totalDays: number;
   addedBy: 'pharmacy' | 'patient' | 'guardian';
+  pharmacyId?: string; // ID of the pharmacy that added this medicine
   addedByName?: string;
   sideEffects?: string[];
   instructions?: string;

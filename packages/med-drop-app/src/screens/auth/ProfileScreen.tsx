@@ -6,9 +6,11 @@ import {
     StyleSheet,
     ScrollView,
     Alert,
+    TextInput,
 } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import { useAuth } from '../../context/AuthContext';
+import { FirestoreService } from '../../services/FirestoreService';
 
 export default function ProfileScreen() {
     const navigation = useNavigation();
@@ -35,6 +37,60 @@ export default function ProfileScreen() {
                         // Navigation will be handled by RootNavigator
                     },
                 },
+            ]
+        );
+    };
+
+    const [showChangePassword, setShowChangePassword] = React.useState(false);
+    const [newPassword, setNewPassword] = React.useState('');
+    const [confirmPassword, setConfirmPassword] = React.useState('');
+    const [processing, setProcessing] = React.useState(false);
+
+    const handleChangePassword = async () => {
+        if (!newPassword || !confirmPassword) {
+            Alert.alert('Error', 'Please enter and confirm your new password.');
+            return;
+        }
+        if (newPassword !== confirmPassword) {
+            Alert.alert('Error', 'Passwords do not match.');
+            return;
+        }
+        setProcessing(true);
+        try {
+            await FirestoreService.changePassword(userRole as any, userId, newPassword);
+            Alert.alert('Success', 'Password updated successfully.');
+            setShowChangePassword(false);
+            setNewPassword('');
+            setConfirmPassword('');
+        } catch (error) {
+            Alert.alert('Error', 'Could not update password. Please try again.');
+        } finally {
+            setProcessing(false);
+        }
+    };
+
+    const handleDeleteAccount = () => {
+        Alert.alert(
+            'Delete Account',
+            'This will permanently delete your account. This action cannot be undone. Do you want to continue?',
+            [
+                { text: 'Cancel', style: 'cancel' },
+                {
+                    text: 'Delete',
+                    style: 'destructive',
+                    onPress: async () => {
+                        setProcessing(true);
+                        try {
+                            await FirestoreService.deleteAccount(userRole as any, userId);
+                            Alert.alert('Account Deleted', 'Your account has been deleted.');
+                            logout();
+                        } catch (error) {
+                            Alert.alert('Error', 'Failed to delete account. Please try again.');
+                        } finally {
+                            setProcessing(false);
+                        }
+                    }
+                }
             ]
         );
     };
@@ -91,6 +147,59 @@ export default function ProfileScreen() {
 
                 <TouchableOpacity style={styles.settingItem}>
                     <Text style={styles.settingText}>Privacy Policy</Text>
+                </TouchableOpacity>
+            </View>
+
+            {/* Account Section */}
+            <View style={styles.section}>
+                <Text style={styles.sectionTitle}>Account</Text>
+
+                {!showChangePassword ? (
+                    <TouchableOpacity style={styles.settingItem} onPress={() => setShowChangePassword(true)}>
+                        <Text style={styles.settingText}>Change Password</Text>
+                        <Text style={styles.settingValue}>Update</Text>
+                    </TouchableOpacity>
+                ) : (
+                    <View>
+                        <View style={styles.settingItem}>
+                            <Text style={styles.settingText}>New Password</Text>
+                        </View>
+                        <TextInput
+                            style={styles.input}
+                            secureTextEntry
+                            placeholder="Enter new password"
+                            value={newPassword}
+                            onChangeText={setNewPassword}
+                        />
+                        <View style={styles.settingItem}>
+                            <Text style={styles.settingText}>Confirm Password</Text>
+                        </View>
+                        <TextInput
+                            style={styles.input}
+                            secureTextEntry
+                            placeholder="Confirm new password"
+                            value={confirmPassword}
+                            onChangeText={setConfirmPassword}
+                        />
+                        <TouchableOpacity
+                            style={[styles.logoutButton, { backgroundColor: '#3B82F6', marginVertical: 12 }]}
+                            onPress={handleChangePassword}
+                            disabled={processing}
+                        >
+                            <Text style={styles.logoutButtonText}>{processing ? 'Saving...' : 'Save Password'}</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                            style={[styles.logoutButton, { backgroundColor: '#6B7280' }]}
+                            onPress={() => setShowChangePassword(false)}
+                            disabled={processing}
+                        >
+                            <Text style={styles.logoutButtonText}>Cancel</Text>
+                        </TouchableOpacity>
+                    </View>
+                )}
+
+                <TouchableOpacity style={[styles.logoutButton, { backgroundColor: '#EF4444' }]} onPress={handleDeleteAccount} disabled={processing}>
+                    <Text style={styles.logoutButtonText}>Delete Account</Text>
                 </TouchableOpacity>
             </View>
 
@@ -211,5 +320,14 @@ const styles = StyleSheet.create({
     footerText: {
         fontSize: 12,
         color: '#9CA3AF',
+    },
+    input: {
+        borderWidth: 1,
+        borderColor: '#E5E7EB',
+        borderRadius: 8,
+        padding: 12,
+        marginHorizontal: 8,
+        marginBottom: 12,
+        color: '#111827',
     },
 });
